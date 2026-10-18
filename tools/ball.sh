@@ -45,7 +45,8 @@ _push() {
     --data-urlencode "step=$3" \
     --data-urlencode "recent=$4" \
     --data-urlencode "steps=$steps" \
-    --data-urlencode "cur=${cur:-0}" >/dev/null 2>&1
+    --data-urlencode "cur=${cur:-0}" \
+    --data-urlencode "op=1" >/dev/null 2>&1
 }
 
 # 唤醒：球没响应就拉起 App（App 里 onResume 会自动起服务）
@@ -164,7 +165,7 @@ case "$cmd" in
     fi
     st=$(curl -s -m 3 "$API/state")
     case "$st" in
-      *"stop=1"*)
+      *";stop=1;"*)
         echo "STOP 用户已按停止：$st" >&2
         exit 1
         ;;

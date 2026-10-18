@@ -5,19 +5,17 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -72,6 +70,8 @@ public class BallService extends Service implements StatusServer.Listener,
     private String[] planSteps = new String[0];
     private int curStep = 0;
     private boolean stopRequested = false;
+    /** device = 真的在接管屏幕；chat = 只写回复、读屏、改代码。 */
+    private String mode = "device";
     private long runStartTs = 0;
 
     private TextView taskTv, elapsedTv, stopTv, titleTv, progressTv, backTv;
@@ -159,7 +159,7 @@ public class BallService extends Service implements StatusServer.Listener,
                 if ("avatar_uri".equals(key)) loadAvatar();
                 if ("breath_ms".equals(key) && haloAnim != null) haloAnim.setDuration(breathMs);
                 if ("pos_x".equals(key) || "pos_y".equals(key)) restorePosition();
-                if ("halo_on".equals(key)) setHalo("running".equals(state));
+                if ("halo_on".equals(key)) setHalo("running".equals(state) && isDeviceMode());
                 if ("card_follow".equals(key)) applyAlpha();
                 if (isCardKey(key) && cardOpen) { closeCard(); openCard(); }
                 applyAlpha();
@@ -169,32 +169,12 @@ public class BallService extends Service implements StatusServer.Listener,
     }
 
     private void loadAvatar() {
-        String uri = BallSettings.avatarUri(this);
-        Bitmap bmp = null;
-        if (uri != null && !uri.isEmpty()) {
-            try {
-                ContentResolver cr = getContentResolver();
-                BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inJustDecodeBounds = true;
-                BitmapFactory.decodeStream(cr.openInputStream(Uri.parse(uri)), null, o);
-                int sample = 1;
-                int max = Math.max(o.outWidth, o.outHeight);
-                while (max / sample > 720) sample *= 2;
-                BitmapFactory.Options o2 = new BitmapFactory.Options();
-                o2.inSampleSize = sample;
-                bmp = BitmapFactory.decodeStream(cr.openInputStream(Uri.parse(uri)), null, o2);
-            } catch (Exception ignored) {
-                bmp = null;
+        AvatarUtil.loadAsync(this, 720, new AvatarUtil.Cb() {
+            @Override public void onBitmap(Bitmap b) {
+                avatar = b;
+                if (ball != null) ball.invalidate();
             }
-        }
-        if (bmp == null) {
-            try {
-                bmp = BitmapFactory.decodeStream(getAssets().open("avatar.jpg"));
-            } catch (Exception ignored) {
-            }
-        }
-        avatar = bmp;
-        if (ball != null) ball.invalidate();
+        });
     }
 
     private void resizeBall() {
@@ -315,6 +295,11 @@ public class BallService extends Service implements StatusServer.Listener,
         wm.addView(ball, ballParams);
     }
 
+    /** 这一轮是不是真的在接管屏幕；只有它才让球呼吸、变亮、弹卡片。 */
+    private boolean isDeviceMode() {
+        return !"chat".equals(mode);
+    }
+
     /** 刚完成一次任务后的 8 秒内：球用"唤醒时"的透明度，卡片保持展开。 */
     private boolean showingDone() {
         return finishedTs > 0 && System.currentTimeMillis() - finishedTs < 8000;
@@ -322,7 +307,9 @@ public class BallService extends Service implements StatusServer.Listener,
 
     private void applyAlpha() {
         if (ball == null) return;
-        int pct = (touchActive || showingDone()) ? alphaActivePct : alphaIdlePct;
+        // 只有"正在接管屏幕"或"刚做完"时才用唤醒时的透明度；纯聊天/读屏时保持待机，不去打扰用户
+        boolean awake = touchActive || showingDone() || ("running".equals(state) && isDeviceMode());
+        int pct = awake ? alphaActivePct : alphaIdlePct;
         ball.setAlpha(pct / 100f);
         if (cardAttached && card != null) {
             card.setAlpha(cardFollowBall ? pct / 100f : 1f);
@@ -386,7 +373,7 @@ public class BallService extends Service implements StatusServer.Listener,
 
     @Override
     public void onUpdate(final String st, final String t, final String s,
-                         final String rec, final String steps, final int cur) {
+                         final String rec, final String steps, final int cur, final String md) {
         ui.post(new Runnable() {
             @Override public void run() {
                 boolean wasRunning = "running".equals(state);
@@ -394,6 +381,7 @@ public class BallService extends Service implements StatusServer.Listener,
                 task = t;
                 step = s;
                 recent = rec;
+                mode = (md == null || md.isEmpty()) ? "device" : ("chat".equals(md) ? "chat" : "device");
                 if (steps != null) {
                     if (steps.trim().isEmpty()) {
                         planSteps = new String[0];
@@ -409,13 +397,21 @@ public class BallService extends Service implements StatusServer.Listener,
                 if (!"running".equals(st)) stopRequested = false;
                 if (wasRunning && !"running".equals(st)) {
                     finishedTs = System.currentTimeMillis();
-                    if (!cardOpen) openCard();
+                    // 只有真实任务收尾才自动展开卡片；纯文字问答（无计划、没动过手）不打扰
+                    if ((planSteps.length > 0 || isDeviceMode()) && !cardOpen) openCard();
                 }
-                setHalo("running".equals(st));
+                setHalo("running".equals(st) && isDeviceMode());
                 refreshCard();
                 applyAlpha();
             }
         });
+    }
+
+    /** /state 的值要保证 k=v; 解析不被内容破坏：把 ; = % 转义成百分号编码。 */
+    private static String esc(String s) {
+        if (s == null || s.isEmpty()) return "";
+        return s.replace("%", "%25").replace(";", "%3B").replace("=", "%3D")
+                .replace("\n", " ").replace("\r", " ");
     }
 
     @Override
@@ -423,7 +419,7 @@ public class BallService extends Service implements StatusServer.Listener,
         String prog = planSteps.length > 0
                 ? Math.min(Math.max(curStep, 1), planSteps.length) + "/" + planSteps.length : "-";
         return "state=" + state + ";stop=" + (stopRequested ? 1 : 0)
-                + ";task=" + task + ";step=" + step + ";progress=" + prog;
+                + ";mode=" + mode + ";task=" + esc(task) + ";step=" + esc(step) + ";progress=" + prog;
     }
 
     @Override
@@ -658,6 +654,8 @@ public class BallService extends Service implements StatusServer.Listener,
         applyCardPosition();
         if (cardAttached && card != null) {
             try { wm.updateViewLayout(card, cardParams); } catch (Exception ignored) {}
+            // applyCardPosition 是纯计算，量不出状态栏 inset 的误差，量一次纠回来
+            realignCard();
         }
     }
 
@@ -673,14 +671,27 @@ public class BallService extends Service implements StatusServer.Listener,
     private void refreshCard() {
         if (!cardOpen || taskTv == null) return;
         String st = state;
+        boolean dev = isDeviceMode();
         if ("running".equals(st)) {
-            titleTv.setText("正在操作你的手机");
-            titleTv.setTextColor(0xFF8FB8FF);
-            taskTv.setText(task.isEmpty() ? "处理中…" : task);
+            if (dev) {
+                titleTv.setText("正在操作你的手机");
+                titleTv.setTextColor(0xFF8FB8FF);
+                taskTv.setText(task.isEmpty() ? "屏幕会自己动，先别碰" : task);
+            } else {
+                titleTv.setText("正在处理");
+                titleTv.setTextColor(0xFFA9B6C6);
+                taskTv.setText(task.isEmpty() ? "手机没有在动，你可以照常用" : task);
+            }
         } else if (showingDone()) {
-            titleTv.setText("已完成 ✓");
-            titleTv.setTextColor(0xFF8FE3A8);
-            taskTv.setText(task.isEmpty() ? "这一步已经做完" : task);
+            if (dev) {
+                titleTv.setText("操作完成 ✓");
+                titleTv.setTextColor(0xFF8FE3A8);
+                taskTv.setText(task.isEmpty() ? "刚才的操作已经结束" : task);
+            } else {
+                titleTv.setText("回复已生成 ✓");
+                titleTv.setTextColor(0xFF8FE3A8);
+                taskTv.setText(task.isEmpty() ? "内容已经输出，可以看了" : task);
+            }
         } else if ("error".equals(st)) {
             titleTv.setText("出错了 / 权限掉线");
             titleTv.setTextColor(0xFFFF9A90);
@@ -709,7 +720,7 @@ public class BallService extends Service implements StatusServer.Listener,
         }
 
         // 没在操作时藏掉停止按钮，返回按钮自动占满整行；停止是可逆的。
-        boolean running = "running".equals(st);
+        boolean running = "running".equals(st) && dev;
         stopTv.setVisibility(running ? View.VISIBLE : View.GONE);
         if (running) {
             if (stopRequested) {
@@ -809,6 +820,25 @@ public class BallService extends Service implements StatusServer.Listener,
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         return START_STICKY;
+    }
+
+    /** 旋转/分屏/分辨率变化后重读屏幕尺寸，不然球可能被 clamp 在旧屏幕范围外。 */
+    @Override
+    public void onConfigurationChanged(final Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        ui.post(new Runnable() {
+            @Override public void run() {
+                density = getResources().getDisplayMetrics().density;
+                screenW = getResources().getDisplayMetrics().widthPixels;
+                screenH = getResources().getDisplayMetrics().heightPixels;
+                readSettings();
+                resizeBall();
+                if (cardOpen) {
+                    positionCard();
+                    realignCard();
+                }
+            }
+        });
     }
 
     @Override

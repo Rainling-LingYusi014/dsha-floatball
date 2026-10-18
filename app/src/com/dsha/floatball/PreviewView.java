@@ -1,16 +1,13 @@
 package com.dsha.floatball;
 
 import android.animation.ValueAnimator;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.net.Uri;
 import android.view.View;
 
 /** 设置页里的实时预览：按当前参数画出悬浮球 + 状态卡片，呼吸动画跟着参数走。 */
@@ -22,6 +19,7 @@ public class PreviewView extends View {
     private final RectF dstRect = new RectF();
     private final RectF cardRect = new RectF();
     private final RectF btnRect = new RectF();
+    private final RectF hlRect = new RectF();
     private ValueAnimator anim;
     private float phase = 0f;
     private Bitmap avatar;
@@ -90,7 +88,17 @@ public class PreviewView extends View {
         }
     }
 
-    /** 设置项变了：重读头像与动画参数。 */
+    /** 只有头像设置变了才需要调：后台解码，不挡主线程。 */
+    public void reloadAvatar() {
+        loadAvatar();
+    }
+
+    /** 只有呼吸相关设置（breath_ms / halo_on）变了才需要调：重启动画。 */
+    public void refreshAnim() {
+        startAnim();
+    }
+
+    /** 全部重载（首次挂载用）。 */
     public void reload() {
         loadAvatar();
         startAnim();
@@ -98,32 +106,12 @@ public class PreviewView extends View {
     }
 
     private void loadAvatar() {
-        Context c = getContext();
-        Bitmap bmp = null;
-        String uri = BallSettings.avatarUri(c);
-        if (uri != null && !uri.isEmpty()) {
-            try {
-                ContentResolver cr = c.getContentResolver();
-                BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inJustDecodeBounds = true;
-                BitmapFactory.decodeStream(cr.openInputStream(Uri.parse(uri)), null, o);
-                int sample = 1;
-                int max = Math.max(o.outWidth, o.outHeight);
-                while (max / sample > 512) sample *= 2;
-                BitmapFactory.Options o2 = new BitmapFactory.Options();
-                o2.inSampleSize = sample;
-                bmp = BitmapFactory.decodeStream(cr.openInputStream(Uri.parse(uri)), null, o2);
-            } catch (Exception ignored) {
-                bmp = null;
+        AvatarUtil.loadAsync(getContext(), 512, new AvatarUtil.Cb() {
+            @Override public void onBitmap(Bitmap b) {
+                avatar = b;
+                invalidate();
             }
-        }
-        if (bmp == null) {
-            try {
-                bmp = BitmapFactory.decodeStream(c.getAssets().open("avatar.jpg"));
-            } catch (Exception ignored) {
-            }
-        }
-        avatar = bmp;
+        });
     }
 
     @Override
@@ -251,8 +239,8 @@ public class PreviewView extends View {
             paint.setFakeBoldText(false);
             if (now) {
                 paint.setColor(0x1A7FB2FF);
-                RectF hl = new RectF(tx - dp(4), y - textSp * sp(), cardRect.right - pad, y + dp(4));
-                canvas.drawRoundRect(hl, dp(8), dp(8), paint);
+                hlRect.set(tx - dp(4), y - textSp * sp(), cardRect.right - pad, y + dp(4));
+                canvas.drawRoundRect(hlRect, dp(8), dp(8), paint);
             }
         }
 

@@ -375,10 +375,22 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     }
 
     @Override
-    public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
-        if (preview != null) preview.post(new Runnable() {
-            @Override public void run() { preview.reload(); }
-        });
+    public void onSharedPreferenceChanged(SharedPreferences sp, final String key) {
+        // 拖滑条时每个 tick 都会进来：按需刷新，别每次都重新解码头像、重启动画
+        if (preview == null) return;
+        if ("avatar_uri".equals(key)) {
+            preview.post(new Runnable() {
+                @Override public void run() { preview.reloadAvatar(); }
+            });
+        } else if ("breath_ms".equals(key) || "halo_on".equals(key)) {
+            preview.post(new Runnable() {
+                @Override public void run() { preview.refreshAnim(); }
+            });
+        } else {
+            preview.post(new Runnable() {
+                @Override public void run() { preview.invalidate(); }
+            });
+        }
     }
 
     @Override
