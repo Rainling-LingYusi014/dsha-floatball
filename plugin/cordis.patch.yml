@@ -1,0 +1,6 @@
+# dsh-floatball-bridge bundle patch: 一个纯事件监听插件。
+# 刻意不声明模块级 inject —— 缺服务时 entry 会永远 pending，
+# 整个 plugin tree 会判定加载失败，Web 就起不来了。
+- insert:
+    - id: dsha-floatball-bridge
+      name: 'dsh-floatball-bridge'

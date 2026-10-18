@@ -1,0 +1,22 @@
+{
+  "name": "dsh-floatball-bridge",
+  "description": "DSHA 配件：把 agent 的流式输出与工具调用实时推送到自制的状态悬浮球（com.dsha.floatball）。替代 dsh-status-overlay 的数据供给半边，样式由 App 侧负责。",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "cordis": {
+    "entry": "lib/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "license": "MIT"
+}

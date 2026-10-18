@@ -1,0 +1,17 @@
+# 构建产物
+build/
+*.apk
+*.apk.idsig
+*.dex
+*.class
+
+# 签名私钥：绝对不要提交
+*.jks
+*.keystore
+
+# 依赖
+node_modules/
+
+# 系统
+.DS_Store
+Thumbs.db
